@@ -1,0 +1,182 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <dirent.h>
+#include <string.h>
+#include <math.h>
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
+
+cgltf_data* load_glb(const char* filename) {
+    cgltf_options options = {0};
+    cgltf_data* data = NULL;
+    cgltf_result result = cgltf_parse_file(&options, filename, &data);
+
+    if (result != cgltf_result_success) {
+        printf("Failed to parse GLB\n");
+        return NULL;
+    }
+
+    result = cgltf_load_buffers(&options, data, filename);
+    if (result != cgltf_result_success) {
+        printf("Failed to load buffers\n");
+        cgltf_free(data);
+        return NULL;
+    }
+    cgltf_validate(data);
+
+    return data;
+}
+
+const char* attribute_type_to_string(cgltf_attribute_type type) {
+    switch (type)
+    {
+    case cgltf_attribute_type_position: return "POSITION";
+    case cgltf_attribute_type_normal:   return "NORMAL";
+    case cgltf_attribute_type_tangent:  return "TANGENT";
+    case cgltf_attribute_type_texcoord: return "TEXCOORD";
+    case cgltf_attribute_type_color:    return "COLOR";
+    case cgltf_attribute_type_joints:   return "JOINTS";
+    case cgltf_attribute_type_weights:  return "WEIGHTS";
+    default:                            return "UNKNOWN";
+    }
+}
+
+void dump_mesh_data(cgltf_data* data) {
+    printf("\n========== MESH DATA ==========\n");
+
+    for (cgltf_size m = 0; m < data->meshes_count; ++m) {
+        cgltf_mesh* mesh = &data->meshes[m];
+        printf("\nMesh %zu : %s\n", m, mesh->name ? mesh->name : "(no name)");
+
+        for (cgltf_size p = 0; p < mesh->primitives_count; ++p) {
+            cgltf_primitive* prim = &mesh->primitives[p];
+            printf("  Primitive %zu\n", p);
+
+            /* ---- Attributes ---- */
+            for (cgltf_size a = 0; a < prim->attributes_count; ++a) {
+                cgltf_attribute* attr = &prim->attributes[a];
+                cgltf_accessor* acc = attr->data;
+
+                printf("    Attribute: %s_%d\n", attribute_type_to_string(attr->type), attr->index);
+                printf("      Count : %zu\n", acc->count);
+
+                float values[4] = {0};
+
+                /* Print first 5 vertices only (avoid spam) */
+                cgltf_size maxPrint = acc->count < 5 ? acc->count : 5;
+
+                for (cgltf_size i = 0; i < maxPrint; ++i) {
+                    cgltf_accessor_read_float(acc, i, values, 4);
+
+                    printf("        [%zu] ", i);
+                    for (int c = 0; c < cgltf_num_components(acc->type); ++c) {
+                        printf("%f ", values[c]);
+                    }
+                    printf("\n");
+                }
+            }
+
+            /* ---- Indices ---- */
+            if (prim->indices) {
+                cgltf_accessor* idx = prim->indices;
+                printf("    Indices Count: %zu\n", idx->count);
+
+                cgltf_size maxPrint = idx->count < 12 ? idx->count : 12;
+
+                // printf("      ");
+                static int tCount = 0;
+                for (cgltf_size i = 0; i < idx->count; ++i) {
+                    if(tCount < 2) {
+                        printf("\t%u ", (unsigned int)cgltf_accessor_read_index(idx, i));
+                        tCount++;
+                    }
+                    else{
+                        printf("\t%u ", (unsigned int)cgltf_accessor_read_index(idx, i));
+                        printf("\n");
+                        tCount = 0;
+                    }
+                }
+                printf("\n");
+            }
+        }
+    }
+}
+
+void dump_materials(cgltf_data* data) {
+    printf("\n========== MATERIALS ==========\n");
+    for (cgltf_size i = 0; i < data->materials_count; ++i)
+    {
+        cgltf_material* mat = &data->materials[i];
+        printf("\nMaterial %zu : %s\n", i, mat->name ? mat->name : "(no name)");
+
+        if (mat->has_pbr_metallic_roughness) {
+            cgltf_pbr_metallic_roughness* pbr = &mat->pbr_metallic_roughness;
+            printf("  Base Color Factor : %f %f %f %f\n", pbr->base_color_factor[0], pbr->base_color_factor[1], pbr->base_color_factor[2], pbr->base_color_factor[3]);
+            printf("  Metallic  : %f\n", pbr->metallic_factor);
+            printf("  Roughness : %f\n", pbr->roughness_factor);
+        }
+        printf("  Has Base Color Texture : %s\n", mat->pbr_metallic_roughness.base_color_texture.texture ? "YES" : "NO");
+    }
+}
+
+void dump_images(cgltf_data* data) {
+    printf("\n========== IMAGES ==========\n");
+    for (cgltf_size i = 0; i < data->images_count; ++i) {
+        cgltf_image* img = &data->images[i];
+        printf("\nImage %zu : %s\n", i, img->name ? img->name : "(no name)");
+
+        if (img->buffer_view) {
+            printf("  Embedded Image\n");
+            printf("  Size : %zu bytes\n", img->buffer_view->size);
+            printf("  MIME : %s\n", img->mime_type);
+        }
+        else if (img->uri) {
+            printf("  External Image URI : %s\n", img->uri);
+        }
+    }
+}
+
+void dump_skins(cgltf_data* data) {
+    printf("\n========== SKINS ==========\n");
+    for (cgltf_size i = 0; i < data->skins_count; ++i) {
+        cgltf_skin* skin = &data->skins[i];
+        printf("\nSkin %zu : %s\n", i, skin->name ? skin->name : "(no name)");
+        printf("  Joints Count : %zu\n", skin->joints_count);
+
+        for (cgltf_size j = 0; j < skin->joints_count; ++j) {
+            printf("    Joint[%zu] : %s\n", j, skin->joints[j]->name ? skin->joints[j]->name : "(no name)");
+        }
+    }
+}
+
+void dump_animations(cgltf_data* data) {
+    printf("\n========== ANIMATIONS ==========\n");
+    for (cgltf_size i = 0; i < data->animations_count; ++i) {
+        cgltf_animation* anim = &data->animations[i];
+        printf("\nAnimation %zu : %s\n", i, anim->name ? anim->name : "(no name)");
+
+        for (cgltf_size c = 0; c < anim->channels_count; ++c) {
+            cgltf_animation_channel* ch = &anim->channels[c];
+
+            printf("  Channel %zu\n", c);
+            printf("    Target Node : %s\n", ch->target_node->name ? ch->target_node->name : "(no name)");
+            printf("    Target Path : %d\n", ch->target_path);
+        }
+    }
+}
+
+int main() {
+    cgltf_data* data = load_glb("Cube.glb");
+    if (!data) {
+        return -1;
+    }
+
+    dump_mesh_data(data);
+    dump_materials(data);
+    dump_images(data);
+    dump_skins(data);
+    dump_animations(data);
+
+    cgltf_free(data);
+    return 0;
+}
